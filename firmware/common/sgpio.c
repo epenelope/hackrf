@@ -27,6 +27,10 @@
 
 #include <sgpio.h>
 
+#ifdef RAD1O
+static void update_q_invert(sgpio_config_t* const config);
+#endif
+
 void sgpio_configure_pin_functions(sgpio_config_t* const config) {
 	scu_pinmux(SCU_PINMUX_SGPIO0, SCU_GPIO_FAST | SCU_CONF_FUNCTION3);
 	scu_pinmux(SCU_PINMUX_SGPIO1, SCU_GPIO_FAST | SCU_CONF_FUNCTION3);
@@ -45,13 +49,11 @@ void sgpio_configure_pin_functions(sgpio_config_t* const config) {
 	scu_pinmux(SCU_PINMUX_SGPIO14, SCU_GPIO_FAST | SCU_CONF_FUNCTION4);	/* GPIO5[13] */
 	scu_pinmux(SCU_PINMUX_SGPIO15, SCU_GPIO_FAST | SCU_CONF_FUNCTION4);	/* GPIO5[14] */
 
-	sgpio_cpld_stream_rx_set_decimation(config, 1);
 	sgpio_cpld_stream_rx_set_q_invert(config, 0);
+    hw_sync_enable(0);
 
 	gpio_output(config->gpio_rx_q_invert);
-	gpio_output(config->gpio_rx_decimation[0]);
-	gpio_output(config->gpio_rx_decimation[1]);
-	gpio_output(config->gpio_rx_decimation[2]);
+	gpio_output(config->gpio_hw_sync_enable);
 }
 
 void sgpio_set_slice_mode(
@@ -87,6 +89,12 @@ void sgpio_configure(
           (cpld_direction << 11) /* 1=Output SGPIO11 High(TX mode), 0=Output SGPIO11 Low(RX mode)*/
         | (1L << 10)	// disable codec data stream during configuration (Output SGPIO10 High)
 		;
+
+#ifdef RAD1O
+	/* The data direction might have changed. Check if we need to
+	 * adjust the q inversion. */
+	update_q_invert(config);
+#endif
 
 	// Enable SGPIO pin outputs.
 	const uint_fast16_t sgpio_gpio_data_direction =
@@ -149,7 +157,7 @@ void sgpio_configure(
 	const uint_fast8_t pos = config->slice_mode_multislice ? 0x1f : 0x03;
 	const bool single_slice = !config->slice_mode_multislice;
 	const uint_fast8_t slice_count = config->slice_mode_multislice ? 8 : 1;
-	const uint_fast8_t clk_capture_mode = (direction == SGPIO_DIRECTION_TX) ? 0 : 1;
+	const uint_fast8_t clk_capture_mode = (direction == SGPIO_DIRECTION_TX) ? 0 : 0;
 	
 	uint32_t slice_enable_mask = 0;
 	/* Configure Slice A, I, E, J, C, K, F, L (sgpio_slice_mode_multislice mode) */
@@ -248,22 +256,49 @@ bool sgpio_cpld_stream_is_enabled(sgpio_config_t* const config) {
 	return (SGPIO_GPIO_OUTREG & (1L << 10)) == 0; /* SGPIO10 */
 }
 
-bool sgpio_cpld_stream_rx_set_decimation(sgpio_config_t* const config, const uint_fast8_t n) {
-	/* CPLD interface is three bits, SGPIO[15:13]:
-	 * 111: decimate by 1 (skip_n=0, skip no samples)
-	 * 110: decimate by 2 (skip_n=1, skip every other sample)
-	 * 101: decimate by 3 (skip_n=2, skip two of three samples)
-	 * ...
-	 * 000: decimate by 8 (skip_n=7, skip seven of eight samples)
-	 */
-	const uint_fast8_t skip_n = n - 1;
-	gpio_write(config->gpio_rx_decimation[0], (skip_n & 1) == 0);
-	gpio_write(config->gpio_rx_decimation[1], (skip_n & 2) == 0);
-	gpio_write(config->gpio_rx_decimation[2], (skip_n & 4) == 0);
 
-	return (skip_n < 8);
+#ifdef RAD1O
+/* The rad1o hardware has a bug which makes it
+ * necessary to also switch between the two options based
+ * on TX or RX mode.
+ *
+ * We use the state of the pin to determine which way we
+ * have to go.
+ *
+ * As TX/RX can change without sgpio_cpld_stream_rx_set_q_invert
+ * being called, we store a local copy of its parameter. */
+static bool sgpio_invert = false;
+
+/* Called when TX/RX changes od sgpio_cpld_stream_rx_set_q_invert
+ * gets called. */
+static void update_q_invert(sgpio_config_t* const config) {
+	/* 1=Output SGPIO11 High(TX mode), 0=Output SGPIO11 Low(RX mode) */
+	bool tx_mode = (SGPIO_GPIO_OUTREG & (1 << 11)) > 0;
+
+	/* 0.13: P1_18 */
+	if( !sgpio_invert & !tx_mode) {
+		gpio_write(config->gpio_rx_q_invert, 1);
+	} else if( !sgpio_invert & tx_mode) {
+		gpio_write(config->gpio_rx_q_invert, 0);
+	} else if( sgpio_invert & !tx_mode) {
+		gpio_write(config->gpio_rx_q_invert, 0);
+	} else if( sgpio_invert & tx_mode) {
+		gpio_write(config->gpio_rx_q_invert, 1);
+	}
 }
 
 void sgpio_cpld_stream_rx_set_q_invert(sgpio_config_t* const config, const uint_fast8_t invert) {
+	if( invert ) {
+		sgpio_invert = true;
+	} else {
+		sgpio_invert = false;
+	}
+
+	update_q_invert(config);
+}
+
+#else
+void sgpio_cpld_stream_rx_set_q_invert(sgpio_config_t* const config, const uint_fast8_t invert) {
 	gpio_write(config->gpio_rx_q_invert, invert);
 }
+#endif

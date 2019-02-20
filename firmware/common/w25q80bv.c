@@ -38,12 +38,15 @@
 #define W25Q80BV_FAST_READ    0x0b
 #define W25Q80BV_WRITE_ENABLE 0x06
 #define W25Q80BV_CHIP_ERASE   0xC7
+#define W25Q80BV_WRITE_STATUS 0x01
 #define W25Q80BV_READ_STATUS1 0x05
+#define W25Q80BV_READ_STATUS2 0x35
 #define W25Q80BV_PAGE_PROGRAM 0x02
 #define W25Q80BV_DEVICE_ID    0xAB
 #define W25Q80BV_UNIQUE_ID    0x4B
 
 #define W25Q80BV_STATUS_BUSY  0x01
+#define W25Q80BV_STATUS_WEL   0x02
 
 #define W25Q80BV_DEVICE_ID_RES  0x13 /* Expected device_id for W25Q80BV */
 
@@ -61,11 +64,10 @@ void w25q80bv_setup(w25q80bv_driver_t* const drv)
 
 	drv->target_init(drv);
 
-	device_id = 0;
-	while(device_id != W25Q80BV_DEVICE_ID_RES)
-	{
+	do {
 		device_id = w25q80bv_get_device_id(drv);
-	}
+	} while(device_id != W25Q80BV_DEVICE_ID_RES &&
+		device_id != W25Q16DV_DEVICE_ID_RES);
 }
 
 uint8_t w25q80bv_get_status(w25q80bv_driver_t* const drv)
@@ -111,20 +113,20 @@ void w25q80bv_write_enable(w25q80bv_driver_t* const drv)
 
 	uint8_t data[] = { W25Q80BV_WRITE_ENABLE };
 	spi_bus_transfer(drv->bus, data, ARRAY_SIZE(data));
+	while (!(w25q80bv_get_status(drv) & W25Q80BV_STATUS_WEL));
 }
 
 void w25q80bv_chip_erase(w25q80bv_driver_t* const drv)
 {
 	uint8_t device_id;
 
-	device_id = 0;
-	while(device_id != W25Q80BV_DEVICE_ID_RES)
-	{
+	do {
 		device_id = w25q80bv_get_device_id(drv);
-	}
+	} while(device_id != W25Q80BV_DEVICE_ID_RES &&
+		device_id != W25Q16DV_DEVICE_ID_RES);
 
-	w25q80bv_write_enable(drv);
 	w25q80bv_wait_while_busy(drv);
+	w25q80bv_write_enable(drv);
 
 	uint8_t data[] = { W25Q80BV_CHIP_ERASE };
 	spi_bus_transfer(drv->bus, data, ARRAY_SIZE(data));
@@ -141,8 +143,8 @@ static void w25q80bv_page_program(w25q80bv_driver_t* const drv, const uint32_t a
 	if (addr > (drv->num_bytes - len))
 		return;
 
-	w25q80bv_write_enable(drv);
 	w25q80bv_wait_while_busy(drv);
+	w25q80bv_write_enable(drv);
 
 	uint8_t header[] = {
 		W25Q80BV_PAGE_PROGRAM,
@@ -165,11 +167,10 @@ void w25q80bv_program(w25q80bv_driver_t* const drv, uint32_t addr, uint32_t len,
 	uint16_t first_block_len;
 	uint8_t device_id;
 
-	device_id = 0;
-	while(device_id != W25Q80BV_DEVICE_ID_RES)
-	{
+	do {
 		device_id = w25q80bv_get_device_id(drv);
-	}	
+	} while(device_id != W25Q80BV_DEVICE_ID_RES &&
+		device_id != W25Q16DV_DEVICE_ID_RES);
 	
 	/* do nothing if we would overflow the flash */
 	if ((len > drv->num_bytes) || (addr > drv->num_bytes)
@@ -225,4 +226,23 @@ void w25q80bv_read(w25q80bv_driver_t* const drv, uint32_t addr, uint32_t len, ui
 	};
 
 	spi_bus_transfer_gather(drv->bus, transfers, ARRAY_SIZE(transfers));
+}
+
+void w25q80bv_clear_status(w25q80bv_driver_t* const drv)
+{
+	w25q80bv_wait_while_busy(drv);
+	w25q80bv_write_enable(drv);
+	uint8_t data[] = { W25Q80BV_WRITE_STATUS, 0x00, 0x00 };
+	spi_bus_transfer(drv->bus, data, ARRAY_SIZE(data));
+}
+
+void w25q80bv_get_full_status(w25q80bv_driver_t* const drv, uint8_t* data)
+{
+	uint8_t cmd[] = { W25Q80BV_READ_STATUS1, 0xFF };
+	spi_bus_transfer(drv->bus, cmd, ARRAY_SIZE(cmd));
+	data[0] = cmd[1];
+	cmd[0] =W25Q80BV_READ_STATUS2;
+	cmd[1] = 0xFF;
+	spi_bus_transfer(drv->bus, cmd, ARRAY_SIZE(cmd));
+	data[1] = cmd[1];
 }

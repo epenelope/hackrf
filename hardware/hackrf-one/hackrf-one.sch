@@ -10,7 +10,6 @@ LIBS:cmos4000
 LIBS:adc-dac
 LIBS:memory
 LIBS:xilinx
-LIBS:special
 LIBS:microcontrollers
 LIBS:dsp
 LIBS:microchip
@@ -31,15 +30,15 @@ LIBS:contrib
 LIBS:valves
 LIBS:hackrf
 LIBS:hackrf-one-cache
-EELAYER 27 0
+EELAYER 25 0
 EELAYER END
 $Descr User 17000 11000
 encoding utf-8
 Sheet 1 4
 Title "HackRF One"
-Date "13 feb 2014"
+Date "2018-04-17"
 Rev ""
-Comp "Copyright 2012 Michael Ossmann"
+Comp "Copyright 2012-2018 Michael Ossmann"
 Comment1 "License: GPL v2"
 Comment2 ""
 Comment3 ""

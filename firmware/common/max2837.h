@@ -48,16 +48,6 @@ struct max2837_driver_t {
 	gpio_t gpio_enable;
 	gpio_t gpio_rx_enable;
 	gpio_t gpio_tx_enable;
-#ifdef JELLYBEAN
-	gpio_t gpio_rxhp;
-	gpio_t gpio_b1;
-	gpio_t gpio_b2;
-	gpio_t gpio_b3;
-	gpio_t gpio_b4;
-	gpio_t gpio_b5;
-	gpio_t gpio_b6;
-	gpio_t gpio_b7;
-#endif
 	void (*target_init)(max2837_driver_t* const drv);
 	void (*set_mode)(max2837_driver_t* const drv, const max2837_mode_t new_mode);
 	max2837_mode_t mode;
@@ -91,7 +81,7 @@ extern void max2837_stop(max2837_driver_t* const drv);
 /* Set frequency in Hz. Frequency setting is a multi-step function
  * where order of register writes matters. */
 extern void max2837_set_frequency(max2837_driver_t* const drv, uint32_t freq);
-bool max2837_set_lpf_bandwidth(max2837_driver_t* const drv, const uint32_t bandwidth_hz);
+uint32_t max2837_set_lpf_bandwidth(max2837_driver_t* const drv, const uint32_t bandwidth_hz);
 bool max2837_set_lna_gain(max2837_driver_t* const drv, const uint32_t gain_db);
 bool max2837_set_vga_gain(max2837_driver_t* const drv, const uint32_t gain_db);
 bool max2837_set_txvga_gain(max2837_driver_t* const drv, const uint32_t gain_db);

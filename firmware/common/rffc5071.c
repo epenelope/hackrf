@@ -208,7 +208,7 @@ void rffc5071_enable(rffc5071_driver_t* const drv)  {
 }
 
 #define LO_MAX 5400
-#define REF_FREQ 50
+#define REF_FREQ 40
 #define FREQ_ONE_MHZ (1000*1000)
 
 /* configure frequency synthesizer in integer mode (lo in MHz) */
@@ -253,13 +253,6 @@ uint64_t rffc5071_config_synth_int(rffc5071_driver_t* const drv, uint16_t lo) {
 	
 	tune_freq_hz = (REF_FREQ * (tmp_n >> 5ULL) * fbkdiv * FREQ_ONE_MHZ)
 			/ (lodiv * (1 << 24ULL));
-
-	/* Path 1 */
-	set_RFFC5071_P1LODIV(drv, n_lo);
-	set_RFFC5071_P1N(drv, n);
-	set_RFFC5071_P1PRESC(drv, fbkdiv >> 1);
-	set_RFFC5071_P1NMSB(drv, p1nmsb);
-	set_RFFC5071_P1NLSB(drv, p1nlsb);
 
 	/* Path 2 */
 	set_RFFC5071_P2LODIV(drv, n_lo);

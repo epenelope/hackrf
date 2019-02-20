@@ -22,11 +22,11 @@
 
 #include <stddef.h>
 
-#include <libopencm3/cm3/vector.h>
-
 #include <libopencm3/lpc43xx/m4/nvic.h>
 
 #include <streaming.h>
+
+#include "tuning.h"
 
 #include "usb.h"
 #include "usb_standard_request.h"
@@ -40,76 +40,60 @@
 #include "usb_api_cpld.h"
 #include "usb_api_register.h"
 #include "usb_api_spiflash.h"
-
+#include "usb_api_operacake.h"
+#include "operacake.h"
+#include "usb_api_sweep.h"
 #include "usb_api_transceiver.h"
-#include "sgpio_isr.h"
 #include "usb_bulk_buffer.h"
  
-static volatile transceiver_mode_t _transceiver_mode = TRANSCEIVER_MODE_OFF;
+#include "hackrf-ui.h"
 
-void set_transceiver_mode(const transceiver_mode_t new_transceiver_mode) {
-	baseband_streaming_disable(&sgpio_config);
-	
-	usb_endpoint_disable(&usb_endpoint_bulk_in);
-	usb_endpoint_disable(&usb_endpoint_bulk_out);
-	
-	_transceiver_mode = new_transceiver_mode;
-	
-	if( _transceiver_mode == TRANSCEIVER_MODE_RX ) {
-		led_off(LED3);
-		led_on(LED2);
-		usb_endpoint_init(&usb_endpoint_bulk_in);
-		rf_path_set_direction(&rf_path, RF_PATH_DIRECTION_RX);
-		vector_table.irq[NVIC_SGPIO_IRQ] = sgpio_isr_rx;
-	} else if (_transceiver_mode == TRANSCEIVER_MODE_TX) {
-		led_off(LED2);
-		led_on(LED3);
-		usb_endpoint_init(&usb_endpoint_bulk_out);
-		rf_path_set_direction(&rf_path, RF_PATH_DIRECTION_TX);
-		vector_table.irq[NVIC_SGPIO_IRQ] = sgpio_isr_tx;
-	} else {
-		led_off(LED2);
-		led_off(LED3);
-		rf_path_set_direction(&rf_path, RF_PATH_DIRECTION_OFF);
-		vector_table.irq[NVIC_SGPIO_IRQ] = sgpio_isr_rx;
-	}
+// TODO: Duplicate code/knowledge, copied from /host/libhackrf/src/hackrf.c
+// TODO: Factor this into a shared #include so that firmware can use
+// the same values.
+typedef enum {
+	HACKRF_VENDOR_REQUEST_SET_TRANSCEIVER_MODE = 1,
+	HACKRF_VENDOR_REQUEST_MAX2837_WRITE = 2,
+	HACKRF_VENDOR_REQUEST_MAX2837_READ = 3,
+	HACKRF_VENDOR_REQUEST_SI5351C_WRITE = 4,
+	HACKRF_VENDOR_REQUEST_SI5351C_READ = 5,
+	HACKRF_VENDOR_REQUEST_SAMPLE_RATE_SET = 6,
+	HACKRF_VENDOR_REQUEST_BASEBAND_FILTER_BANDWIDTH_SET = 7,
+	HACKRF_VENDOR_REQUEST_RFFC5071_WRITE = 8,
+	HACKRF_VENDOR_REQUEST_RFFC5071_READ = 9,
+	HACKRF_VENDOR_REQUEST_SPIFLASH_ERASE = 10,
+	HACKRF_VENDOR_REQUEST_SPIFLASH_WRITE = 11,
+	HACKRF_VENDOR_REQUEST_SPIFLASH_READ = 12,
+	_HACKRF_VENDOR_REQUEST_WRITE_CPLD = 13,
+	HACKRF_VENDOR_REQUEST_BOARD_ID_READ = 14,
+	HACKRF_VENDOR_REQUEST_VERSION_STRING_READ = 15,
+	HACKRF_VENDOR_REQUEST_SET_FREQ = 16,
+	HACKRF_VENDOR_REQUEST_AMP_ENABLE = 17,
+	HACKRF_VENDOR_REQUEST_BOARD_PARTID_SERIALNO_READ = 18,
+	HACKRF_VENDOR_REQUEST_SET_LNA_GAIN = 19,
+	HACKRF_VENDOR_REQUEST_SET_VGA_GAIN = 20,
+	HACKRF_VENDOR_REQUEST_SET_TXVGA_GAIN = 21,
+	_HACKRF_VENDOR_REQUEST_SET_IF_FREQ = 22,
+	HACKRF_VENDOR_REQUEST_ANTENNA_ENABLE = 23,
+	HACKRF_VENDOR_REQUEST_SET_FREQ_EXPLICIT = 24,
+	HACKRF_VENDOR_REQUEST_USB_WCID_VENDOR_REQ = 25,
+	HACKRF_VENDOR_REQUEST_INIT_SWEEP = 26,
+	HACKRF_VENDOR_REQUEST_OPERACAKE_GET_BOARDS = 27,
+	HACKRF_VENDOR_REQUEST_OPERACAKE_SET_PORTS = 28,
+	HACKRF_VENDOR_REQUEST_SET_HW_SYNC_MODE = 29,
+	HACKRF_VENDOR_REQUEST_RESET = 30,
+	HACKRF_VENDOR_REQUEST_OPERACAKE_SET_RANGES = 31,
+	HACKRF_VENDOR_REQUEST_CLKOUT_ENABLE = 32,
+	HACKRF_VENDOR_REQUEST_SPIFLASH_STATUS = 33,
+	HACKRF_VENDOR_REQUEST_SPIFLASH_CLEAR_STATUS = 34,
+	HACKRF_VENDOR_REQUEST_OPERACAKE_GPIO_TEST = 35,
+	HACKRF_VENDOR_REQUEST_CPLD_CHECKSUM = 36,
 
-	if( _transceiver_mode != TRANSCEIVER_MODE_OFF ) {
-		si5351c_activate_best_clock_source(&clock_gen);
-		baseband_streaming_enable(&sgpio_config);
-	}
-}
+	/* Update to be the next integer after the highest-numbered request. */
+	_HACKRF_VENDOR_REQUEST_ARRAY_SIZE	
+} hackrf_vendor_request;
 
-transceiver_mode_t transceiver_mode(void) {
-	return _transceiver_mode;
-}
-
-usb_request_status_t usb_vendor_request_set_transceiver_mode(
-	usb_endpoint_t* const endpoint,
-	const usb_transfer_stage_t stage
-) {
-	if( stage == USB_TRANSFER_STAGE_SETUP ) {
-		switch( endpoint->setup.value ) {
-		case TRANSCEIVER_MODE_OFF:
-		case TRANSCEIVER_MODE_RX:
-		case TRANSCEIVER_MODE_TX:
-			set_transceiver_mode(endpoint->setup.value);
-			usb_transfer_schedule_ack(endpoint->in);
-			return USB_REQUEST_STATUS_OK;
-		case TRANSCEIVER_MODE_CPLD_UPDATE:
-			usb_endpoint_init(&usb_endpoint_bulk_out);
-			start_cpld_update = true;
-			usb_transfer_schedule_ack(endpoint->in);
-			return USB_REQUEST_STATUS_OK;
-		default:
-			return USB_REQUEST_STATUS_STALL;
-		}
-	} else {
-		return USB_REQUEST_STATUS_OK;
-	}
-}
-
-static const usb_request_handler_fn vendor_request_handler[] = {
+static usb_request_handler_fn vendor_request_handler[] = {
 	NULL,
 	usb_vendor_request_set_transceiver_mode,
 	usb_vendor_request_write_max2837,
@@ -118,8 +102,13 @@ static const usb_request_handler_fn vendor_request_handler[] = {
 	usb_vendor_request_read_si5351c,
 	usb_vendor_request_set_sample_rate_frac,
 	usb_vendor_request_set_baseband_filter_bandwidth,
+#ifdef RAD1O
+	NULL, // write_rffc5071 not used
+	NULL, // read_rffc5071 not used
+#else
 	usb_vendor_request_write_rffc5071,
 	usb_vendor_request_read_rffc5071,
+#endif
 	usb_vendor_request_erase_spiflash,
 	usb_vendor_request_write_spiflash,
 	usb_vendor_request_read_spiflash,
@@ -140,6 +129,17 @@ static const usb_request_handler_fn vendor_request_handler[] = {
 #endif
 	usb_vendor_request_set_freq_explicit,
 	usb_vendor_request_read_wcid,  // USB_WCID_VENDOR_REQ
+	usb_vendor_request_init_sweep,
+	usb_vendor_request_operacake_get_boards,
+	usb_vendor_request_operacake_set_ports,
+	usb_vendor_request_set_hw_sync_mode,
+	usb_vendor_request_reset,
+	usb_vendor_request_operacake_set_ranges,
+	usb_vendor_request_set_clkout_enable,
+	usb_vendor_request_spiflash_status,
+	usb_vendor_request_spiflash_clear_status,
+	usb_vendor_request_operacake_gpio_test,
+	usb_vendor_request_cpld_checksum,
 };
 
 static const uint32_t vendor_request_handler_count =
@@ -212,12 +212,17 @@ void usb_set_descriptor_by_serial_number(void)
 int main(void) {
 	pin_setup();
 	enable_1v8_power();
-#ifdef HACKRF_ONE
+#if (defined HACKRF_ONE || defined RAD1O)
 	enable_rf_power();
+
+	/* Let the voltage stabilize */
+	delay(1000000);
 #endif
 	cpu_clock_init();
 
+#ifndef DFU_MODE
 	usb_set_descriptor_by_serial_number();
+#endif
 
 	usb_set_configuration_changed_cb(usb_configuration_changed);
 	usb_peripheral_reset();
@@ -234,15 +239,28 @@ int main(void) {
 	
 	nvic_set_priority(NVIC_USB0_IRQ, 255);
 
+	hackrf_ui_init();
+
 	usb_run(&usb_device);
 	
 	rf_path_init(&rf_path);
 
+	if( hackrf_ui() == NULL ) {
+		operacake_init();
+	}
+
 	unsigned int phase = 0;
+
 	while(true) {
 		// Check whether we need to initiate a CPLD update
 		if (start_cpld_update)
 			cpld_update();
+
+		// Check whether we need to initiate sweep mode
+		if (start_sweep_mode) {
+			start_sweep_mode = false;
+			sweep_mode();
+		}
 
 		// Set up IN transfer of buffer 0.
 		if ( usb_bulk_buffer_offset >= 16384
@@ -257,7 +275,7 @@ int main(void) {
 				);
 			phase = 0;
 		}
-	
+
 		// Set up IN transfer of buffer 1.
 		if ( usb_bulk_buffer_offset < 16384
 		     && phase == 0
@@ -272,6 +290,6 @@ int main(void) {
 			phase = 1;
 		}
 	}
-	
+
 	return 0;
 }

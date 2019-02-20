@@ -116,11 +116,11 @@ void si5351c_configure_pll_sources(si5351c_driver_t* const drv)
 /* MultiSynth NA (PLLA) and NB (PLLB) */
 void si5351c_configure_pll_multisynth(si5351c_driver_t* const drv)
 {
-	//init plla to (0x0e00+512)/128*25mhz xtal = 800mhz -> int mode
+	/*PLLA: 25MHz XTAL * (0x0e00+512)/128 = 800mhz -> int mode */
 	uint8_t data[] = { 26, 0x00, 0x01, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x00 };
 	si5351c_write(drv, data, sizeof(data));
 
-	/* 10 MHz input on CLKIN for PLLB */
+	/*PLLB: 10MHz CLKIN * (0x2600+512)/128 = 800mhz */
 	data[0] = 34;
 	data[4] = 0x26;
 	si5351c_write(drv, data, sizeof(data));
@@ -164,64 +164,16 @@ void si5351c_configure_multisynth(si5351c_driver_t* const drv,
 	si5351c_write(drv, data, sizeof(data));
 }
 
-#ifdef JELLYBEAN
-/*
- * Registers 16 through 23: CLKx Control
- * CLK0:
- *   CLK0_PDN=0 (powered up)
- *   MS0_INT=1 (integer mode)
- *   MS0_SRC=0 (PLLA as source for MultiSynth 0)
- *   CLK0_INV=0 (not inverted)
- *   CLK0_SRC=3 (MS0 as input source)
- *   CLK0_IDRV=3 (8mA)
- * CLK1:
- *   CLK1_PDN=0 (powered up)
- *   MS1_INT=1 (integer mode)
- *   MS1_SRC=0 (PLLA as source for MultiSynth 1)
- *   CLK1_INV=0 (not inverted)
- *   CLK1_SRC=2 (MS0 as input source)
- *   CLK1_IDRV=3 (8mA)
- * CLK2:
- *   CLK2_PDN=0 (powered up)
- *   MS2_INT=1 (integer mode)
- *   MS2_SRC=0 (PLLA as source for MultiSynth 2)
- *   CLK2_INV=0 (not inverted)
- *   CLK2_SRC=2 (MS0 as input source)
- *   CLK2_IDRV=3 (8mA)
- * CLK3:
- *   CLK3_PDN=0 (powered up)
- *   MS3_INT=1 (integer mode)
- *   MS3_SRC=0 (PLLA as source for MultiSynth 3)
- *   CLK3_INV=0 (inverted)
- *   CLK3_SRC=2 (MS0 as input source)
- *   CLK3_IDRV=3 (8mA)
- * CLK4:
- *   CLK4_PDN=0 (powered up)
- *   MS4_INT=0 (fractional mode -- to support 12MHz to LPC for USB DFU)
- *   MS4_SRC=0 (PLLA as source for MultiSynth 4)
- *   CLK4_INV=0 (not inverted)
- *   CLK4_SRC=3 (MS4 as input source)
- *   CLK4_IDRV=3 (8mA)
- * CLK5:
- *   CLK5_PDN=0 (powered up)
- *   MS5_INT=1 (integer mode)
- *   MS5_SRC=0 (PLLA as source for MultiSynth 5)
- *   CLK5_INV=0 (not inverted)
- *   CLK5_SRC=3 (MS5 as input source)
- *   CLK5_IDRV=3 (8mA)
- */
-void si5351c_configure_clock_control(si5351c_driver_t* const drv)
-{
-	uint8_t data[] = { 16, 0x4F, 0x4B, 0x4B, 0x4B, 0x0F, 0x4F, 0xC0, 0xC0 };
-	si5351c_write(drv, data, sizeof(data));
-}
-#endif
-
-#if (defined JAWBREAKER || defined HACKRF_ONE)
 void si5351c_configure_clock_control(si5351c_driver_t* const drv, const enum pll_sources source)
 {
 	uint8_t pll;
+#ifdef RAD1O
+	(void) source;
+	/* PLLA on XTAL */
+	pll = SI5351C_CLK_PLL_SRC_A;
+#endif
 
+#if (defined JAWBREAKER || defined HACKRF_ONE)
 	if (source == PLL_SOURCE_CLKIN) {
 		/* PLLB on CLKIN */
 		pll = SI5351C_CLK_PLL_SRC_B;
@@ -229,29 +181,47 @@ void si5351c_configure_clock_control(si5351c_driver_t* const drv, const enum pll
 		/* PLLA on XTAL */
 		pll = SI5351C_CLK_PLL_SRC_A;
 	}
+#endif
+	/* Clock to CPU is deactivated as it is not used and creates noise */
+	/* External clock output is deactivated as it is not used and creates noise */
 	uint8_t data[] = {16
-	,SI5351C_CLK_FRAC_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_2MA)
+	,SI5351C_CLK_FRAC_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_8MA)
+	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_0_4) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_2MA) | SI5351C_CLK_INV
 	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_0_4) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_2MA)
-	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_0_4) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_2MA)
-	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_8MA)
-	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_6MA)
+	,SI5351C_CLK_POWERDOWN | SI5351C_CLK_INT_MODE /*not connected, but: plla int mode*/
+	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_6MA) | SI5351C_CLK_INV
 	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_4MA)
 	,SI5351C_CLK_POWERDOWN | SI5351C_CLK_INT_MODE /*not connected, but: plla int mode*/
-	,SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_8MA)
+	,SI5351C_CLK_POWERDOWN | SI5351C_CLK_INT_MODE /*not connected, but: plla int mode*/
 	 };
 	si5351c_write(drv, data, sizeof(data));
 }
-#endif
 
-/* Enable CLK outputs 0, 1, 2, 3, 4, 5, 7 only. */
- void si5351c_enable_clock_outputs(si5351c_driver_t* const drv)
- {
-	uint8_t data[] = { 3, 0x40 };
- 	si5351c_write(drv, data, sizeof(data));
- }
+#define SI5351C_CLK_ENABLE(x)	(0<<x)
+#define SI5351C_CLK_DISABLE(x)	(1<<x)
+#define SI5351C_REG_OUTPUT_EN	(3)
+#define SI5351C_REG_CLK3_CTRL	(19)
 
+void si5351c_enable_clock_outputs(si5351c_driver_t* const drv)
+{
+	/* Enable CLK outputs 0, 1, 2, 4, 5 only. */
+	/* 7: Clock to CPU is deactivated as it is not used and creates noise */
+	/* 3: External clock output is deactivated by default */
+	// uint8_t data[] = { 3, ~((1 << 0) | (1 << 1) | (1 << 2) | (1 << 4) | (1 << 5))};
+	uint8_t data[] = { SI5351C_REG_OUTPUT_EN,
+		SI5351C_CLK_ENABLE(0) |
+		SI5351C_CLK_ENABLE(1) |
+		SI5351C_CLK_ENABLE(2) |
+		SI5351C_CLK_DISABLE(3) |
+		SI5351C_CLK_ENABLE(4) |
+		SI5351C_CLK_ENABLE(5) |
+		SI5351C_CLK_DISABLE(6) |
+		SI5351C_CLK_DISABLE(7)
+	};
+	si5351c_write(drv, data, sizeof(data));
+}
 
- void si5351c_set_int_mode(si5351c_driver_t* const drv, const uint_fast8_t ms_number, const uint_fast8_t on){
+void si5351c_set_int_mode(si5351c_driver_t* const drv, const uint_fast8_t ms_number, const uint_fast8_t on){
   uint8_t data[] = {16, 0};
 
   if(ms_number < 8){
@@ -265,8 +235,7 @@ void si5351c_configure_clock_control(si5351c_driver_t* const drv, const enum pll
 
       si5351c_write(drv, data, 2);
   }
-
- }
+}
 
 void si5351c_set_clock_source(si5351c_driver_t* const drv, const enum pll_sources source)
 {
@@ -289,4 +258,44 @@ void si5351c_activate_best_clock_source(si5351c_driver_t* const drv)
 			si5351c_set_clock_source(drv, PLL_SOURCE_CLKIN);
 		}
 	}
+}
+
+void si5351c_clkout_enable(si5351c_driver_t* const drv, uint8_t enable)
+{
+	/* Set optput in output enable register */
+	uint8_t output_enable = si5351c_read_single(drv, 3);
+	output_enable = output_enable & !SI5351C_CLK_DISABLE(3);
+	if(enable)
+		output_enable = output_enable | SI5351C_CLK_ENABLE(3);
+	else
+		output_enable = output_enable | SI5351C_CLK_DISABLE(3);
+	uint8_t oe_data[] = {SI5351C_REG_OUTPUT_EN, output_enable};
+	si5351c_write(drv, oe_data, 2);
+
+	/* Configure clock to 10MHz (TODO customisable?) */
+	si5351c_configure_multisynth(drv, 3, 80*128-512, 0, 1, 0);
+
+	/* Set power up/doen in CLK3 control register*/
+	uint8_t pll;
+	#ifdef RAD1O
+		/* PLLA on XTAL */
+		pll = SI5351C_CLK_PLL_SRC_A;
+	#endif
+	
+	#if (defined JAWBREAKER || defined HACKRF_ONE)
+		if (active_clock_source == PLL_SOURCE_CLKIN) {
+			/* PLLB on CLKIN */
+			pll = SI5351C_CLK_PLL_SRC_B;
+		} else {
+			/* PLLA on XTAL */
+			pll = SI5351C_CLK_PLL_SRC_A;
+		}
+	#endif
+	uint8_t clk3_ctrl;
+	if(enable)
+		clk3_ctrl = SI5351C_CLK_INT_MODE | SI5351C_CLK_PLL_SRC(pll) | SI5351C_CLK_SRC(SI5351C_CLK_SRC_MULTISYNTH_SELF) | SI5351C_CLK_IDRV(SI5351C_CLK_IDRV_8MA);
+	else
+		clk3_ctrl = SI5351C_CLK_POWERDOWN | SI5351C_CLK_INT_MODE;
+	uint8_t clk3_data[] = {SI5351C_REG_CLK3_CTRL, clk3_ctrl};
+	si5351c_write(drv, clk3_data, 2);
 }

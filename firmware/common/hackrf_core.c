@@ -22,34 +22,34 @@
  */
 
 #include "hackrf_core.h"
+#include "hackrf-ui.h"
 #include "si5351c.h"
 #include "spi_ssp.h"
 #include "max2837.h"
 #include "max2837_target.h"
 #include "max5864.h"
 #include "max5864_target.h"
-#include "rffc5071.h"
-#include "rffc5071_spi.h"
 #include "w25q80bv.h"
 #include "w25q80bv_target.h"
 #include "i2c_bus.h"
 #include "i2c_lpc.h"
+#include "cpld_jtag.h"
 #include <libopencm3/lpc43xx/cgu.h>
+#include <libopencm3/lpc43xx/ccu.h>
 #include <libopencm3/lpc43xx/scu.h>
 #include <libopencm3/lpc43xx/ssp.h>
 
 #include "gpio_lpc.h"
 
-/* TODO: Consolidate ARRAY_SIZE declarations */
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
-
 #define WAIT_CPU_CLOCK_INIT_DELAY   (10000)
-
 /* GPIO Output PinMux */
-static struct gpio_t gpio_led[3] = {
+static struct gpio_t gpio_led[] = {
 	GPIO(2,  1),
 	GPIO(2,  2),
-	GPIO(2,  8)
+	GPIO(2,  8),
+#ifdef RAD1O
+	GPIO(5,  26),
+#endif
 };
 
 static struct gpio_t gpio_1v8_enable		= GPIO(3,  6);
@@ -59,42 +59,24 @@ static struct gpio_t gpio_max2837_select	= GPIO(0, 15);
 static struct gpio_t gpio_max2837_enable	= GPIO(2,  6);
 static struct gpio_t gpio_max2837_rx_enable	= GPIO(2,  5);
 static struct gpio_t gpio_max2837_tx_enable	= GPIO(2,  4);
-#ifdef JELLYBEAN
-static struct gpio_t gpio_max2837_rxhp		= GPIO(2,  0);
-static struct gpio_t gpio_max2837_b1		= GPIO(2,  9);
-static struct gpio_t gpio_max2837_b2		= GPIO(2, 10);
-static struct gpio_t gpio_max2837_b3		= GPIO(2, 11);
-static struct gpio_t gpio_max2837_b4		= GPIO(2, 12);
-static struct gpio_t gpio_max2837_b5		= GPIO(2, 13);
-static struct gpio_t gpio_max2837_b6		= GPIO(2, 14);
-static struct gpio_t gpio_max2837_b7		= GPIO(2, 15);
-#endif
 
 /* MAX5864 SPI chip select (AD_CS) GPIO PinMux */
 static struct gpio_t gpio_max5864_select	= GPIO(2,  7);
 
 /* RFFC5071 GPIO serial interface PinMux */
-#ifdef JELLYBEAN
-static struct gpio_t gpio_rffc5072_select	= GPIO(3,  8);
-static struct gpio_t gpio_rffc5072_clock	= GPIO(3,  9);
-static struct gpio_t gpio_rffc5072_data		= GPIO(3, 10);
-static struct gpio_t gpio_rffc5072_reset	= GPIO(3, 11);
-#endif
-#if (defined JAWBREAKER || defined HACKRF_ONE)
-static struct gpio_t gpio_rffc5072_select	= GPIO(2, 13);
-static struct gpio_t gpio_rffc5072_clock	= GPIO(5,  6);
-static struct gpio_t gpio_rffc5072_data		= GPIO(3,  3);
-static struct gpio_t gpio_rffc5072_reset	= GPIO(2, 14);
-#endif
-
-/* RF LDO control */
-#ifdef JAWBREAKER
-static struct gpio_t gpio_rf_ldo_enable		= GPIO(2, 9);
-#endif
+// #ifdef RAD1O
+// static struct gpio_t gpio_rffc5072_select	= GPIO(2, 13);
+// static struct gpio_t gpio_rffc5072_clock	= GPIO(5,  6);
+// static struct gpio_t gpio_rffc5072_data		= GPIO(3,  3);
+// static struct gpio_t gpio_rffc5072_reset	= GPIO(2, 14);
+// #endif
 
 /* RF supply (VAA) control */
 #ifdef HACKRF_ONE
 static struct gpio_t gpio_vaa_disable		= GPIO(2, 9);
+#endif
+#ifdef RAD1O
+static struct gpio_t gpio_vaa_enable		= GPIO(2, 9);
 #endif
 
 static struct gpio_t gpio_w25q80bv_hold		= GPIO(1, 14);
@@ -117,19 +99,24 @@ static struct gpio_t gpio_amp_bypass		= GPIO(0, 14);
 static struct gpio_t gpio_rx_amp			= GPIO(1, 11);
 static struct gpio_t gpio_no_rx_amp_pwr		= GPIO(1, 12);
 #endif
-#if 0
-/* GPIO Input */
-static struct gpio_t gpio_boot[] = {
-	GPIO(0,  8),
-	GPIO(0,  9),
-	GPIO(5,  7),
-	GPIO(1, 10),
-};
+#ifdef RAD1O
+static struct gpio_t gpio_tx_rx_n			= GPIO(1,  11);
+static struct gpio_t gpio_tx_rx				= GPIO(0,  14);
+static struct gpio_t gpio_by_mix			= GPIO(1,  12);
+static struct gpio_t gpio_by_mix_n			= GPIO(2,  10);
+static struct gpio_t gpio_by_amp			= GPIO(1,  0);
+static struct gpio_t gpio_by_amp_n			= GPIO(5,  5);
+static struct gpio_t gpio_mixer_en			= GPIO(5,  16);
+static struct gpio_t gpio_low_high_filt		= GPIO(2,  11);
+static struct gpio_t gpio_low_high_filt_n	= GPIO(2,  12);
+static struct gpio_t gpio_tx_amp			= GPIO(2,  15);
+static struct gpio_t gpio_rx_lna			= GPIO(5,  15);
 #endif
+
 /* CPLD JTAG interface GPIO pins */
 static struct gpio_t gpio_cpld_tdo			= GPIO(5, 18);
 static struct gpio_t gpio_cpld_tck			= GPIO(3,  0);
-#ifdef HACKRF_ONE
+#if (defined HACKRF_ONE || defined RAD1O)
 static struct gpio_t gpio_cpld_tms			= GPIO(3,  4);
 static struct gpio_t gpio_cpld_tdi			= GPIO(3,  1);
 #else
@@ -137,11 +124,12 @@ static struct gpio_t gpio_cpld_tms			= GPIO(3,  1);
 static struct gpio_t gpio_cpld_tdi			= GPIO(3,  4);
 #endif
 
-static struct gpio_t gpio_rx_decimation[3] = {
-	GPIO(5, 12),
-	GPIO(5, 13),
-	GPIO(5, 14),
-};
+#ifdef USER_INTERFACE_PORTAPACK
+static struct gpio_t gpio_cpld_pp_tms		= GPIO(1,  1);
+static struct gpio_t gpio_cpld_pp_tdo		= GPIO(1,  8);
+#endif
+
+static struct gpio_t gpio_hw_sync_enable = GPIO(5,12);
 static struct gpio_t gpio_rx_q_invert 		= GPIO(0, 13);
 
 i2c_bus_t i2c0 = {
@@ -213,16 +201,6 @@ max2837_driver_t max2837 = {
 	.gpio_enable = &gpio_max2837_enable,
 	.gpio_rx_enable = &gpio_max2837_rx_enable,
 	.gpio_tx_enable = &gpio_max2837_tx_enable,
-#ifdef JELLYBEAN
-	.gpio_rxhp = &gpio_max2837_rxhp,
-	.gpio_b1 = &gpio_max2837_b1,
-	.gpio_b2 = &gpio_max2837_b2,
-	.gpio_b3 = &gpio_max2837_b3,
-	.gpio_b4 = &gpio_max2837_b4,
-	.gpio_b5 = &gpio_max2837_b5,
-	.gpio_b6 = &gpio_max2837_b6,
-	.gpio_b7 = &gpio_max2837_b7,
-#endif
 	.target_init = max2837_target_init,
 	.set_mode = max2837_target_set_mode,
 };
@@ -230,25 +208,6 @@ max2837_driver_t max2837 = {
 max5864_driver_t max5864 = {
 	.bus = &spi_bus_ssp1,
 	.target_init = max5864_target_init,
-};
-
-const rffc5071_spi_config_t rffc5071_spi_config = {
-	.gpio_select = &gpio_rffc5072_select,
-	.gpio_clock = &gpio_rffc5072_clock,
-	.gpio_data = &gpio_rffc5072_data,
-};
-
-spi_bus_t spi_bus_rffc5071 = {
-	.config = &rffc5071_spi_config,
-	.start = rffc5071_spi_start,
-	.stop = rffc5071_spi_stop,
-	.transfer = rffc5071_spi_transfer,
-	.transfer_gather = rffc5071_spi_transfer_gather,
-};
-
-rffc5071_driver_t rffc5072 = {
-	.bus = &spi_bus_rffc5071,
-	.gpio_reset = &gpio_rffc5072_reset,
 };
 
 const ssp_config_t ssp_config_w25q80bv = {
@@ -276,16 +235,13 @@ w25q80bv_driver_t spi_flash = {
 
 sgpio_config_t sgpio_config = {
 	.gpio_rx_q_invert = &gpio_rx_q_invert,
-	.gpio_rx_decimation = {
-		&gpio_rx_decimation[0],
-		&gpio_rx_decimation[1],
-		&gpio_rx_decimation[2],
-	},
+	.gpio_hw_sync_enable = &gpio_hw_sync_enable,
 	.slice_mode_multislice = true,
 };
 
 rf_path_t rf_path = {
 	.switchctrl = 0,
+#ifdef HACKRF_ONE
 	.gpio_hp = &gpio_hp,
 	.gpio_lp = &gpio_lp,
 	.gpio_tx_mix_bp = &gpio_tx_mix_bp,
@@ -299,6 +255,20 @@ rf_path_t rf_path = {
 	.gpio_amp_bypass = &gpio_amp_bypass,
 	.gpio_rx_amp = &gpio_rx_amp,
 	.gpio_no_rx_amp_pwr = &gpio_no_rx_amp_pwr,
+#endif
+#ifdef RAD1O
+	.gpio_tx_rx_n = &gpio_tx_rx_n,
+	.gpio_tx_rx = &gpio_tx_rx,
+	.gpio_by_mix = &gpio_by_mix,
+	.gpio_by_mix_n = &gpio_by_mix_n,
+	.gpio_by_amp = &gpio_by_amp,
+	.gpio_by_amp_n = &gpio_by_amp_n,
+	.gpio_mixer_en = &gpio_mixer_en,
+	.gpio_low_high_filt = &gpio_low_high_filt,
+	.gpio_low_high_filt_n = &gpio_low_high_filt_n,
+	.gpio_tx_amp = &gpio_tx_amp,
+	.gpio_rx_lna = &gpio_rx_lna,
+#endif
 };
 
 jtag_gpio_t jtag_gpio_cpld = {
@@ -306,6 +276,10 @@ jtag_gpio_t jtag_gpio_cpld = {
 	.gpio_tck = &gpio_cpld_tck,
 	.gpio_tdi = &gpio_cpld_tdi,
 	.gpio_tdo = &gpio_cpld_tdo,
+#ifdef USER_INTERFACE_PORTAPACK
+	.gpio_pp_tms = &gpio_cpld_pp_tms,
+	.gpio_pp_tdo = &gpio_cpld_pp_tdo,
+#endif
 };
 
 jtag_t jtag_cpld = {
@@ -363,6 +337,8 @@ bool sample_rate_frac_set(uint32_t rate_num, uint32_t rate_denom)
 	uint32_t a, b, c;
 	uint32_t rem;
 
+	hackrf_ui_setSampleRate(rate_num/2);
+
 	/* Find best config */
 	a = (VCO_FREQ * rate_denom) / rate_num;
 
@@ -417,52 +393,6 @@ bool sample_rate_frac_set(uint32_t rate_num, uint32_t rate_denom)
 }
 
 bool sample_rate_set(const uint32_t sample_rate_hz) {
-#ifdef JELLYBEAN
-	/* Due to design issues, Jellybean/Lemondrop frequency plan is limited.
-	 * Long version of the story: The MAX2837 reference frequency
-	 * originates from the same PLL as the sample clocks, and in order to
-	 * keep the sample clocks in phase and keep jitter noise down, the MAX2837
-	 * and sample clocks must be integer-related.
-	 */
-	uint32_t r_div_sample = 2;
-	uint32_t r_div_sgpio = 1;
-	
-	switch( sample_rate_hz ) {
-	case 5000000:
-		r_div_sample = 3;	/* 800 MHz / 20 / 8 =  5 MHz */
-		r_div_sgpio = 2;	/* 800 MHz / 20 / 4 = 10 MHz */
-		break;
-		
-	case 10000000:
-		r_div_sample = 2;	/* 800 MHz / 20 / 4 = 10 MHz */
-		r_div_sgpio = 1;	/* 800 MHz / 20 / 2 = 20 MHz */
-		break;
-		
-	case 20000000:
-		r_div_sample = 1;	/* 800 MHz / 20 / 2 = 20 MHz */
-		r_div_sgpio = 0;	/* 800 MHz / 20 / 1 = 40 MHz */
-		break;
-		
-	default:
-		return false;
-	}
-	
-	/* NOTE: Because MS1, 2, 3 outputs are slaved to PLLA, the p1, p2, p3
-	 * values are irrelevant. */
-	
-	/* MS0/CLK1 is the source for the MAX5864 codec. */
-	si5351c_configure_multisynth(&clock_gen, 1, 4608, 0, 1, r_div_sample);
-
-	/* MS0/CLK2 is the source for the CPLD codec clock (same as CLK1). */
-	si5351c_configure_multisynth(&clock_gen, 2, 4608, 0, 1, r_div_sample);
-
-	/* MS0/CLK3 is the source for the SGPIO clock. */
-	si5351c_configure_multisynth(&clock_gen, 3, 4608, 0, 1, r_div_sgpio);
-	
-	return true;
-#endif
-
-#if (defined JAWBREAKER || defined HACKRF_ONE)
 	uint32_t p1 = 4608;
 	uint32_t p2 = 0;
 	uint32_t p3 = 0;
@@ -523,15 +453,17 @@ bool sample_rate_set(const uint32_t sample_rate_hz) {
 	si5351c_configure_multisynth(&clock_gen, 2, p1, 0, 1, 0);//p1 doesn't matter
 
 	return true;
-#endif
 }
 
 bool baseband_filter_bandwidth_set(const uint32_t bandwidth_hz) {
-	return max2837_set_lpf_bandwidth(&max2837, bandwidth_hz);
+	uint32_t bandwidth_hz_real = max2837_set_lpf_bandwidth(&max2837, bandwidth_hz);
+
+	if(bandwidth_hz_real) hackrf_ui_setFilterBW(bandwidth_hz_real);
+
+	return bandwidth_hz_real != 0;
 }
 
-/* clock startup for Jellybean with Lemondrop attached
-Configure PLL1 to max speed (204MHz).
+/* clock startup for LPC4320 configure PLL1 to max speed (204MHz).
 Note: PLL1 clock is used by M4/M0 core, Peripheral, APB1. */ 
 void cpu_clock_init(void)
 {
@@ -551,64 +483,32 @@ void cpu_clock_init(void)
 	si5351c_configure_pll_sources(&clock_gen);
 	si5351c_configure_pll_multisynth(&clock_gen);
 
-#ifdef JELLYBEAN
 	/*
-	 * Jellybean/Lemondrop clocks:
-	 *   CLK0 -> MAX2837
-	 *   CLK1 -> MAX5864/CPLD.GCLK0
-	 *   CLK2 -> CPLD.GCLK1
-	 *   CLK3 -> CPLD.GCLK2
-	 *   CLK4 -> LPC4330
-	 *   CLK5 -> RFFC5072
-	 *   CLK6 -> extra
-	 *   CLK7 -> extra
-	 */
-
-	/* MS0/CLK0 is the source for the MAX2837 clock input. */
-	si5351c_configure_multisynth(&clock_gen, 0, 2048, 0, 1, 0); /* 40MHz */
-
-	/* MS4/CLK4 is the source for the LPC43xx microcontroller. */
-	si5351c_configure_multisynth(&clock_gen, 4, 8021, 0, 3, 0); /* 12MHz */
-
-	/* MS5/CLK5 is the source for the RFFC5071 mixer. */
-	si5351c_configure_multisynth(&clock_gen, 5, 1536, 0, 1, 0); /* 50MHz */
-#endif
-
-#if (defined JAWBREAKER || defined HACKRF_ONE)
-	/*
-	 * Jawbreaker clocks:
+	 * Clocks:
 	 *   CLK0 -> MAX5864/CPLD
 	 *   CLK1 -> CPLD
 	 *   CLK2 -> SGPIO
-	 *   CLK3 -> external clock output
-	 *   CLK4 -> RFFC5072
-	 *   CLK5 -> MAX2837
+	 *   CLK3 -> External Clock Output (power down at boot)
+	 *   CLK4 -> RFFC5072 (MAX2837 on rad1o)
+	 *   CLK5 -> MAX2837 (MAX2871 on rad1o)
 	 *   CLK6 -> none
-	 *   CLK7 -> LPC4330 (but LPC4330 starts up on its own crystal)
+	 *   CLK7 -> LPC43xx (uses a 12MHz crystal by default)
 	 */
 
-	/* MS3/CLK3 is the source for the external clock output. */
-	si5351c_configure_multisynth(&clock_gen, 3, 80*128-512, 0, 1, 0); /* 800/80 = 10MHz */
-
-	/* MS4/CLK4 is the source for the RFFC5071 mixer. */
-	si5351c_configure_multisynth(&clock_gen, 4, 16*128-512, 0, 1, 0); /* 800/16 = 50MHz */
- 
- 	/* MS5/CLK5 is the source for the MAX2837 clock input. */
+	/* MS4/CLK4 is the source for the RFFC5071 mixer (MAX2837 on rad1o). */
+	si5351c_configure_multisynth(&clock_gen, 4, 20*128-512, 0, 1, 0); /* 800/20 = 40MHz */
+ 	/* MS5/CLK5 is the source for the MAX2837 clock input (MAX2871 on rad1o). */
 	si5351c_configure_multisynth(&clock_gen, 5, 20*128-512, 0, 1, 0); /* 800/20 = 40MHz */
 
 	/* MS6/CLK6 is unused. */
-	/* MS7/CLK7 is the source for the LPC43xx microcontroller. */
-	uint8_t ms7data[] = { 90, 255, 20, 0 };
-	si5351c_write(&clock_gen, ms7data, sizeof(ms7data));
-#endif
+	/* MS7/CLK7 is unused. */
 
-	/* Set to 10 MHz, the common rate between Jellybean and Jawbreaker. */
+	/* Set to 10 MHz, the common rate between Jawbreaker and HackRF One. */
 	sample_rate_set(10000000);
 
 	si5351c_set_clock_source(&clock_gen, PLL_SOURCE_XTAL);
 	// soft reset
-	uint8_t resetdata[] = { 177, 0xac };
-	si5351c_write(&clock_gen, resetdata, sizeof(resetdata));
+	si5351c_reset_pll(&clock_gen);
 	si5351c_enable_clock_outputs(&clock_gen);
 
 	//FIXME disable I2C
@@ -616,18 +516,12 @@ void cpu_clock_init(void)
 	i2c_bus_start(clock_gen.bus, &i2c_config_si5351c_fast_clock);
 
 	/*
-	 * 12MHz clock is entering LPC XTAL1/OSC input now.  On
-	 * Jellybean/Lemondrop, this is a signal from the clock generator.  On
-	 * Jawbreaker, there is a 12 MHz crystal at the LPC.
+	 * 12MHz clock is entering LPC XTAL1/OSC input now.
+	 * On HackRF One and Jawbreaker, there is a 12 MHz crystal at the LPC.
 	 * Set up PLL1 to run from XTAL1 input.
 	 */
 
 	//FIXME a lot of the details here should be in a CGU driver
-
-#ifdef JELLYBEAN
-	/* configure xtal oscillator for external clock input signal */
-	CGU_XTAL_OSC_CTRL |= CGU_XTAL_OSC_CTRL_BYPASS;
-#endif
 
 	/* set xtal oscillator to low frequency mode */
 	CGU_XTAL_OSC_CTRL &= ~CGU_XTAL_OSC_CTRL_HF_MASK;
@@ -694,6 +588,74 @@ void cpu_clock_init(void)
 
 	CGU_BASE_SSP1_CLK = CGU_BASE_SSP1_CLK_AUTOBLOCK(1)
 			| CGU_BASE_SSP1_CLK_CLK_SEL(CGU_SRC_PLL1);
+
+#if (defined JAWBREAKER || defined HACKRF_ONE)
+	/* Disable unused clocks */
+	/* Start with PLLs */
+	CGU_PLL0AUDIO_CTRL = CGU_PLL0AUDIO_CTRL_PD(1);
+
+	/* Dividers */
+	CGU_IDIVA_CTRL = CGU_IDIVA_CTRL_PD(1);
+	CGU_IDIVB_CTRL = CGU_IDIVB_CTRL_PD(1);
+	CGU_IDIVC_CTRL = CGU_IDIVC_CTRL_PD(1);
+	CGU_IDIVD_CTRL = CGU_IDIVD_CTRL_PD(1);
+	CGU_IDIVE_CTRL = CGU_IDIVE_CTRL_PD(1);
+
+	/* Base clocks */
+	CGU_BASE_SPIFI_CLK =  CGU_BASE_SPIFI_CLK_PD(1); /* SPIFI is only used at boot */
+	CGU_BASE_USB1_CLK = CGU_BASE_USB1_CLK_PD(1); /* USB1 is not exposed on HackRF */
+	CGU_BASE_PHY_RX_CLK = CGU_BASE_PHY_RX_CLK_PD(1);
+	CGU_BASE_PHY_TX_CLK = CGU_BASE_PHY_TX_CLK_PD(1);
+	CGU_BASE_LCD_CLK = CGU_BASE_LCD_CLK_PD(1);
+	CGU_BASE_VADC_CLK = CGU_BASE_VADC_CLK_PD(1);
+	CGU_BASE_SDIO_CLK = CGU_BASE_SDIO_CLK_PD(1);
+	CGU_BASE_UART0_CLK = CGU_BASE_UART0_CLK_PD(1);
+	CGU_BASE_UART1_CLK = CGU_BASE_UART1_CLK_PD(1);
+	CGU_BASE_UART2_CLK = CGU_BASE_UART2_CLK_PD(1);
+	CGU_BASE_UART3_CLK = CGU_BASE_UART3_CLK_PD(1);
+	CGU_BASE_OUT_CLK = CGU_BASE_OUT_CLK_PD(1);
+	CGU_BASE_AUDIO_CLK = CGU_BASE_AUDIO_CLK_PD(1);
+	CGU_BASE_CGU_OUT0_CLK = CGU_BASE_CGU_OUT0_CLK_PD(1);
+	CGU_BASE_CGU_OUT1_CLK = CGU_BASE_CGU_OUT1_CLK_PD(1);
+
+	/* Disable unused peripheral clocks */
+	CCU1_CLK_APB1_CAN1_CFG = 0;
+	CCU1_CLK_APB1_I2S_CFG = 0;
+	CCU1_CLK_APB1_MOTOCONPWM_CFG = 0;
+	CCU1_CLK_APB3_ADC0_CFG = 0;
+	CCU1_CLK_APB3_ADC1_CFG = 0;
+	CCU1_CLK_APB3_CAN0_CFG = 0;
+	CCU1_CLK_APB3_DAC_CFG = 0;
+	CCU1_CLK_M4_DMA_CFG = 0;
+	CCU1_CLK_M4_EMC_CFG = 0;
+	CCU1_CLK_M4_EMCDIV_CFG = 0;
+	CCU1_CLK_M4_ETHERNET_CFG = 0;
+	CCU1_CLK_M4_LCD_CFG = 0;
+	CCU1_CLK_M4_QEI_CFG = 0;
+	CCU1_CLK_M4_RITIMER_CFG = 0;
+	CCU1_CLK_M4_SCT_CFG = 0;
+	CCU1_CLK_M4_SDIO_CFG = 0;
+	CCU1_CLK_M4_SPIFI_CFG = 0;
+	CCU1_CLK_M4_TIMER0_CFG = 0;
+	CCU1_CLK_M4_TIMER1_CFG = 0;
+	CCU1_CLK_M4_TIMER2_CFG = 0;
+	CCU1_CLK_M4_TIMER3_CFG = 0;
+	CCU1_CLK_M4_UART1_CFG = 0;
+	CCU1_CLK_M4_USART0_CFG = 0;
+	CCU1_CLK_M4_USART2_CFG = 0;
+	CCU1_CLK_M4_USART3_CFG = 0;
+	CCU1_CLK_M4_USB1_CFG = 0;
+	CCU1_CLK_M4_VADC_CFG = 0;
+	// CCU1_CLK_SPIFI_CFG = 0;
+	// CCU1_CLK_USB1_CFG = 0;
+	// CCU1_CLK_VADC_CFG = 0;
+	// CCU2_CLK_APB0_UART1_CFG = 0;
+	// CCU2_CLK_APB0_USART0_CFG = 0;
+	// CCU2_CLK_APB2_USART2_CFG = 0;
+	// CCU2_CLK_APB2_USART3_CFG = 0;
+	// CCU2_CLK_APLL_CFG = 0;
+	// CCU2_CLK_SDIO_CFG = 0;
+#endif
 }
 
 
@@ -798,56 +760,93 @@ void ssp1_set_mode_max5864(void)
 }
 
 void pin_setup(void) {
-	/* Release CPLD JTAG pins */
-	scu_pinmux(SCU_PINMUX_CPLD_TDO, SCU_GPIO_NOPULL | SCU_CONF_FUNCTION4);
-	scu_pinmux(SCU_PINMUX_CPLD_TCK, SCU_GPIO_NOPULL | SCU_CONF_FUNCTION0);
+	/* Configure all GPIO as Input (safe state) */
+	gpio_init();
+
+	/* TDI and TMS pull-ups are required in all JTAG-compliant devices.
+	 *
+	 * The HackRF CPLD is always present, so let the CPLD pull up its TDI and TMS.
+	 *
+	 * The PortaPack may not be present, so pull up the PortaPack TMS pin from the
+	 * microcontroller.
+	 *
+	 * TCK is recommended to be held low, so use microcontroller pull-down.
+	 *
+	 * TDO is undriven except when in Shift-IR or Shift-DR phases.
+	 * Use the microcontroller to pull down to keep from floating.
+	 *
+	 * LPC43xx pull-up and pull-down resistors are approximately 53K.
+	 */
+#ifdef USER_INTERFACE_PORTAPACK
+	scu_pinmux(SCU_PINMUX_PP_TMS,   SCU_GPIO_PUP    | SCU_CONF_FUNCTION0);
+	scu_pinmux(SCU_PINMUX_PP_TDO,   SCU_GPIO_PDN    | SCU_CONF_FUNCTION0);
+#endif
 	scu_pinmux(SCU_PINMUX_CPLD_TMS, SCU_GPIO_NOPULL | SCU_CONF_FUNCTION0);
 	scu_pinmux(SCU_PINMUX_CPLD_TDI, SCU_GPIO_NOPULL | SCU_CONF_FUNCTION0);
-	
-	gpio_input(&gpio_cpld_tdo);
-	gpio_input(&gpio_cpld_tck);
-	gpio_input(&gpio_cpld_tms);
-	gpio_input(&gpio_cpld_tdi);
-	
+	scu_pinmux(SCU_PINMUX_CPLD_TDO, SCU_GPIO_PDN    | SCU_CONF_FUNCTION4);
+	scu_pinmux(SCU_PINMUX_CPLD_TCK, SCU_GPIO_PDN    | SCU_CONF_FUNCTION0);
+
 	/* Configure SCU Pin Mux as GPIO */
 	scu_pinmux(SCU_PINMUX_LED1, SCU_GPIO_NOPULL);
 	scu_pinmux(SCU_PINMUX_LED2, SCU_GPIO_NOPULL);
 	scu_pinmux(SCU_PINMUX_LED3, SCU_GPIO_NOPULL);
-	
-	scu_pinmux(SCU_PINMUX_EN1V8, SCU_GPIO_NOPULL);
+#ifdef RAD1O
+	scu_pinmux(SCU_PINMUX_LED4, SCU_GPIO_NOPULL | SCU_CONF_FUNCTION4);
+#endif
+
+	/* Configure USB indicators */
+#ifdef JAWBREAKER
+	scu_pinmux(SCU_PINMUX_USB_LED0, SCU_CONF_FUNCTION3);
+	scu_pinmux(SCU_PINMUX_USB_LED1, SCU_CONF_FUNCTION3);
+#endif
+
+	gpio_output(&gpio_led[0]);
+	gpio_output(&gpio_led[1]);
+	gpio_output(&gpio_led[2]);
+#ifdef RAD1O
+	gpio_output(&gpio_led[3]);
+#endif
+
+	disable_1v8_power();
+	gpio_output(&gpio_1v8_enable);
+	scu_pinmux(SCU_PINMUX_EN1V8, SCU_GPIO_NOPULL | SCU_CONF_FUNCTION0);
+
+#ifdef HACKRF_ONE
+	/* Safe state: start with VAA turned off: */
+	disable_rf_power();
+
+	/* Configure RF power supply (VAA) switch control signal as output */
+	gpio_output(&gpio_vaa_disable);
+
+#ifndef USER_INTERFACE_PORTAPACK
+	/* Not sure why this is necessary for stock HackRF. Just "rhyming" with the RAD1O code? */
+	scu_pinmux(SCU_PINMUX_GPIO3_10, SCU_GPIO_PDN | SCU_CONF_FUNCTION0);
+	scu_pinmux(SCU_PINMUX_GPIO3_11, SCU_GPIO_PDN | SCU_CONF_FUNCTION0);
+#endif
+#endif
+
+#ifdef RAD1O
+	/* Safe state: start with VAA turned off: */
+	disable_rf_power();
+
+	/* Configure RF power supply (VAA) switch control signal as output */
+	gpio_output(&gpio_vaa_enable);
 
 	/* Disable unused clock outputs. They generate noise. */
 	scu_pinmux(CLK0, SCU_CLK_IN | SCU_CONF_FUNCTION7);
 	scu_pinmux(CLK2, SCU_CLK_IN | SCU_CONF_FUNCTION7);
 
-	/* Configure USB indicators */
-#if (defined JELLYBEAN || defined JAWBREAKER)
-	scu_pinmux(SCU_PINMUX_USB_LED0, SCU_CONF_FUNCTION3);
-	scu_pinmux(SCU_PINMUX_USB_LED1, SCU_CONF_FUNCTION3);
-#endif
+	scu_pinmux(SCU_PINMUX_GPIO3_10, SCU_GPIO_PDN | SCU_CONF_FUNCTION0);
+	scu_pinmux(SCU_PINMUX_GPIO3_11, SCU_GPIO_PDN | SCU_CONF_FUNCTION0);
 
-	/* Configure all GPIO as Input (safe state) */
-	gpio_init();
-
-	gpio_output(&gpio_led[0]);
-	gpio_output(&gpio_led[1]);
-	gpio_output(&gpio_led[2]);
-
-	gpio_output(&gpio_1v8_enable);
-
-#ifdef HACKRF_ONE
-	/* Configure RF power supply (VAA) switch control signal as output */
-	gpio_output(&gpio_vaa_disable);
-
-	/* Safe state: start with VAA turned off: */
-	disable_rf_power();
 #endif
 
 	/* enable input on SCL and SDA pins */
 	SCU_SFSI2C0 = SCU_I2C0_NOMINAL;
 
 	spi_bus_start(&spi_bus_ssp1, &ssp_config_max2837);
-	spi_bus_start(&spi_bus_rffc5071, &rffc5071_spi_config);
+
+	mixer_bus_setup(&mixer);
 
 	rf_path_pin_setup(&rf_path);
 	
@@ -867,11 +866,28 @@ void disable_1v8_power(void) {
 
 #ifdef HACKRF_ONE
 void enable_rf_power(void) {
+	uint32_t i;
+
+	/* many short pulses to avoid one big voltage glitch */
+	for (i = 0; i < 1000; i++) {
+		gpio_clear(&gpio_vaa_disable);
+		gpio_set(&gpio_vaa_disable);
+	}
 	gpio_clear(&gpio_vaa_disable);
 }
 
 void disable_rf_power(void) {
 	gpio_set(&gpio_vaa_disable);
+}
+#endif
+
+#ifdef RAD1O
+void enable_rf_power(void) {
+	gpio_set(&gpio_vaa_enable);
+}
+
+void disable_rf_power(void) {
+	gpio_clear(&gpio_vaa_enable);
 }
 #endif
 
@@ -885,4 +901,8 @@ void led_off(const led_t led) {
 
 void led_toggle(const led_t led) {
 	gpio_toggle(&gpio_led[led]);
+}
+
+void hw_sync_enable(const hw_sync_mode_t hw_sync_mode){
+    gpio_write(&gpio_hw_sync_enable, hw_sync_mode==1);
 }
